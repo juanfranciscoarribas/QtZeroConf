@@ -261,7 +261,7 @@ extern "C" {
         #pragma warning( disable:4706 ) // Disable "assignment within conditional expression" for Microsoft headers.
 
     #endif
-
+    #include    <stdint.h>
     #include    <windows.h>
     #include    <winsock2.h>
     #include    <Ws2tcpip.h>
