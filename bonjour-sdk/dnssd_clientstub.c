@@ -590,6 +590,7 @@ static DNSServiceErrorType ConnectToServer(DNSServiceRef *ref, DNSServiceFlags f
         NumTries = DNSSD_CLIENT_MAXTRIES;
     #endif
 
+
     sdr = malloc(sizeof(DNSServiceOp));
     if (!sdr)
     {
@@ -707,6 +708,7 @@ static DNSServiceErrorType ConnectToServer(DNSServiceRef *ref, DNSServiceFlags f
     }
 
     *ref = sdr;
+    syslog(LOG_WARNING, "dnssd_clientstub ConnectToServer: connect() successful");
     return kDNSServiceErr_NoError;
 }
 
@@ -722,6 +724,8 @@ static DNSServiceErrorType deliver_request(ipc_msg_hdr *hdr, DNSServiceOp *sdr)
     #if defined(USE_TCP_LOOPBACK) || defined(USE_NAMED_ERROR_RETURN_SOCKET)
     char *data;
     #endif
+
+    syslog(LOG_INFO, "dnssd_clientstub deliver_request start");
 
     if (!hdr)
     {
@@ -751,6 +755,7 @@ static DNSServiceErrorType deliver_request(ipc_msg_hdr *hdr, DNSServiceOp *sdr)
 
     if (MakeSeparateReturnSocket)
     {
+        syslog(LOG_INFO, "dnssd_clientstub deliver_request MakeSeparateReturnSocket");
         #if defined(USE_TCP_LOOPBACK)
         {
             union { uint16_t s; u_char b[2]; } port;
@@ -850,6 +855,7 @@ static DNSServiceErrorType deliver_request(ipc_msg_hdr *hdr, DNSServiceOp *sdr)
         errsd = sdr->sockfd;
     if (MakeSeparateReturnSocket || sdr->op == send_bpf)    // Okay to use sdr->op when checking for op == send_bpf
     {
+       syslog(LOG_INFO, "dnssd_clientstub deliver_request (MakeSeparateReturnSocket || sdr->op == send_bpf)");
 #if defined(USE_TCP_LOOPBACK) || defined(USE_NAMED_ERROR_RETURN_SOCKET)
         // At this point we may wait in accept for a few milliseconds waiting for the daemon to connect back to us,
         // but that's okay -- the daemon should not take more than a few milliseconds to respond.
@@ -902,7 +908,7 @@ static DNSServiceErrorType deliver_request(ipc_msg_hdr *hdr, DNSServiceOp *sdr)
 #if TEST_KQUEUE_CONTROL_MESSAGE_BUG
         sleep(1);
 #endif
-
+        syslog(LOG_INFO, "dnssd_clientstub deliver_request pre-sendmsg");
 #if DEBUG_64BIT_SCM_RIGHTS
         syslog(LOG_WARNING, "dnssd_clientstub sendmsg read sd=%d write sd=%d %ld %ld %ld/%ld/%ld/%ld",
                errsd, listenfd, sizeof(dnssd_sock_t), sizeof(void*),
@@ -933,19 +939,23 @@ static DNSServiceErrorType deliver_request(ipc_msg_hdr *hdr, DNSServiceOp *sdr)
         listenfd = dnssd_InvalidSocket; // Make sure we don't close it a second time in the cleanup handling below
     }
 
+    syslog(LOG_INFO, "dnssd_clientstub deliver_request pre-set_waitlimit");
     // At this point we may wait in read_all for a few milliseconds waiting for the daemon to send us the error code,
     // but that's okay -- the daemon should not take more than a few milliseconds to respond.
     // set_waitlimit() ensures we do not block indefinitely just in case something is wrong
-    if (sdr->op == send_bpf)    // Okay to use sdr->op when checking for op == send_bpf
+    if (sdr->op == send_bpf) {    // Okay to use sdr->op when checking for op == send_bpf
+        syslog(LOG_INFO, "dnssd_clientstub deliver_request: sdr->op");
         err = kDNSServiceErr_NoError;
+    }
     else if ((err = set_waitlimit(errsd, DNSSD_CLIENT_TIMEOUT)) == kDNSServiceErr_NoError)
     {
+        syslog(LOG_INFO, "dnssd_clientstub deliver_request: pre-read-all");
         if (read_all(errsd, (char*)&err, (int)sizeof(err)) < 0)
             err = kDNSServiceErr_ServiceNotRunning; // On failure read_all will have written a message to syslog for us
         else
             err = ntohl(err);
     }
-    //syslog(LOG_WARNING, "dnssd_clientstub deliver_request: retrieved error code %d", err);
+    syslog(LOG_INFO, "dnssd_clientstub deliver_request: returned error code %d", err);
 
 cleanup:
     if (MakeSeparateReturnSocket)
@@ -1060,6 +1070,7 @@ DNSServiceErrorType DNSSD_API DNSServiceProcessResult(DNSServiceRef sdRef)
 {
     int morebytes = 0;
 
+    syslog(LOG_WARNING, "dnssd_clientstub DNSServiceProcessResult sdRef=%p", sdRef);
     if (!sdRef) { syslog(LOG_WARNING, "dnssd_clientstub DNSServiceProcessResult called with NULL DNSServiceRef"); return kDNSServiceErr_BadParam; }
 
     if (!DNSServiceRefValid(sdRef))
@@ -1091,6 +1102,7 @@ DNSServiceErrorType DNSSD_API DNSServiceProcessResult(DNSServiceRef sdRef)
         // where a non-blocking socket is told there is data, but it was a false positive.
         // On error, read_all will write a message to syslog for us, so don't need to duplicate that here
         // Note: If we want to properly support using non-blocking sockets in the future
+        syslog(LOG_WARNING, "dnssd_clientstub DNSServiceProcessResult pre-read-all");
         int result = read_all(sdRef->sockfd, (void *)&cbh.ipc_hdr, sizeof(cbh.ipc_hdr));
         if (result == read_all_fail)
         {
@@ -1111,6 +1123,7 @@ DNSServiceErrorType DNSSD_API DNSServiceProcessResult(DNSServiceRef sdRef)
                 CallbackWithError(sdRef, kDNSServiceErr_ServiceNotRunning);
             }
 #endif
+            syslog(LOG_WARNING, "dnssd_clientstub DNSServiceProcessResult kDNSServiceErr_ServiceNotRunning");
             // Don't touch sdRef anymore as it might have been deallocated
             return kDNSServiceErr_ServiceNotRunning;
         }
@@ -1121,6 +1134,7 @@ DNSServiceErrorType DNSSD_API DNSServiceProcessResult(DNSServiceRef sdRef)
                 sdRef->logcounter++;
                 syslog(LOG_WARNING, "dnssd_clientstub DNSServiceProcessResult error: select indicated data was waiting but read_all returned EWOULDBLOCK");
             }
+            syslog(LOG_WARNING, "dnssd_clientstub DNSServiceProcessResult kDNSServiceErr_NoError");
             return kDNSServiceErr_NoError;
         }
 
@@ -1132,6 +1146,7 @@ DNSServiceErrorType DNSSD_API DNSServiceProcessResult(DNSServiceRef sdRef)
             return kDNSServiceErr_Incompatible;
         }
 
+        syslog(LOG_WARNING, "dnssd_clientstub DNSServiceProcessResult pre-readall");
         data = malloc(cbh.ipc_hdr.datalen);
         if (!data) return kDNSServiceErr_NoMemory;
         if (read_all(sdRef->sockfd, data, cbh.ipc_hdr.datalen) < 0) // On error, read_all will write a message to syslog for us
@@ -1158,6 +1173,7 @@ DNSServiceErrorType DNSSD_API DNSServiceProcessResult(DNSServiceRef sdRef)
         else
         {
             const char *ptr = data;
+            syslog(LOG_WARNING, "dnssd_clientstub DNSServiceProcessResult else, ptr=%p", ptr);
             cbh.cb_flags     = get_flags     (&ptr, data + cbh.ipc_hdr.datalen);
             cbh.cb_interface = get_uint32    (&ptr, data + cbh.ipc_hdr.datalen);
             cbh.cb_err       = get_error_code(&ptr, data + cbh.ipc_hdr.datalen);
@@ -1166,12 +1182,16 @@ DNSServiceErrorType DNSSD_API DNSServiceProcessResult(DNSServiceRef sdRef)
             // To do this we set moreptr to point to morebytes. If the client does call DNSServiceRefDeallocate(),
             // then that routine will clear morebytes for us, and cause us to exit our loop.
             morebytes = more_bytes(sdRef->sockfd);
+            syslog(LOG_WARNING, "dnssd_clientstub DNSServiceProcessResult morebytes=%d", morebytes);
             if (morebytes)
             {
                 cbh.cb_flags |= kDNSServiceFlagsMoreComing;
                 sdRef->moreptr = &morebytes;
             }
-            if (ptr) sdRef->ProcessReply(sdRef, &cbh, ptr, data + cbh.ipc_hdr.datalen);
+            if (ptr) {
+              syslog(LOG_WARNING, "dnssd_clientstub DNSServiceProcessResult ProcessReply=%p", sdRef->ProcessReply);
+              sdRef->ProcessReply(sdRef, &cbh, ptr, data + cbh.ipc_hdr.datalen);
+            }
             // Careful code here:
             // If morebytes is non-zero, that means we set sdRef->moreptr above, and the operation was not
             // cancelled out from under us, so now we need to clear sdRef->moreptr so we don't leave a stray
@@ -1190,6 +1210,8 @@ DNSServiceErrorType DNSSD_API DNSServiceProcessResult(DNSServiceRef sdRef)
 
 void DNSSD_API DNSServiceRefDeallocate(DNSServiceRef sdRef)
 {
+    syslog(LOG_INFO, "DNSServiceRefDeallocate: sdRef=%p", sdRef);
+
     if (!sdRef) { syslog(LOG_WARNING, "dnssd_clientstub DNSServiceRefDeallocate called with NULL DNSServiceRef"); return; }
 
     if (!DNSServiceRefValid(sdRef))     // Also verifies dnssd_SocketValid(sdRef->sockfd) for us too
@@ -1383,8 +1405,8 @@ static int includeP2PWithIndexAny()
 DNSServiceErrorType DNSSD_API DNSServiceResolve
 (
     DNSServiceRef                 *sdRef,
-    DNSServiceFlags flags,
-    uint32_t interfaceIndex,
+    DNSServiceFlags               flags,
+    uint32_t                      interfaceIndex,
     const char                    *name,
     const char                    *regtype,
     const char                    *domain,
@@ -1512,6 +1534,9 @@ static void handle_addrinfo_response(DNSServiceOp *const sdr, const CallbackHead
     uint32_t ttl;
 
     get_string(&data, end, hostname, kDNSServiceMaxDomainName);
+
+    syslog(LOG_INFO, "handle_addrinfo_response: resolved %s", hostname);
+
     rrtype  = get_uint16(&data, end);
     rrclass = get_uint16(&data, end);
     rdlen   = get_uint16(&data, end);
@@ -1587,6 +1612,8 @@ DNSServiceErrorType DNSSD_API DNSServiceGetAddrInfo
 
     if (!sdRef || !hostname || !callBack) return kDNSServiceErr_BadParam;
 
+    syslog(LOG_INFO, "DNSServiceGetAddrInfo: (sdRef=%p) Connecting to Bonjour server...", sdRef);
+
     err = ConnectToServer(sdRef, flags, addrinfo_request, handle_addrinfo_response, callBack, context);
     if (err)
     {
@@ -1599,6 +1626,7 @@ DNSServiceErrorType DNSSD_API DNSServiceGetAddrInfo
     len += sizeof(uint32_t);      // protocol
     len += strlen(hostname) + 1;
 
+    syslog(LOG_INFO, "DNSServiceGetAddrInfo: Creating handle for the request...");
     hdr = create_hdr(addrinfo_request, &len, &ptr, (*sdRef)->primary ? 1 : 0, *sdRef);
     if (!hdr) { DNSServiceRefDeallocate(*sdRef); *sdRef = NULL; return kDNSServiceErr_NoMemory; }
 
@@ -1607,8 +1635,10 @@ DNSServiceErrorType DNSSD_API DNSServiceGetAddrInfo
     put_uint32(protocol, &ptr);
     put_string(hostname, &ptr);
 
+    syslog(LOG_INFO, "DNSServiceGetAddrInfo: Delivering request to Bonjour...");
     err = deliver_request(hdr, *sdRef);     // Will free hdr for us
     if (err) { DNSServiceRefDeallocate(*sdRef); *sdRef = NULL; }
+    syslog(LOG_INFO, "DNSServiceGetAddrInfo: err=%d", err);
     return err;
 }
 
@@ -1818,7 +1848,7 @@ static void ConnectionResponse(DNSServiceOp *const sdr, const CallbackHeader *co
 {
     (void)data; // Unused
 
-    //printf("ConnectionResponse got %d\n", cbh->ipc_hdr.op);
+    syslog(LOG_INFO, "dnssd_clientstub ConnectionResponse got %d\n", cbh->ipc_hdr.op);
     if (cbh->ipc_hdr.op != reg_record_reply_op)
     {
         // When using kDNSServiceFlagsShareConnection, need to search the list of associated DNSServiceOps
@@ -1829,6 +1859,7 @@ static void ConnectionResponse(DNSServiceOp *const sdr, const CallbackHeader *co
             op = op->next;
         // Note: We may sometimes not find a matching DNSServiceOp, in the case where the client has
         // cancelled the subordinate DNSServiceOp, but there are still messages in the pipeline from the daemon
+        syslog(LOG_INFO, "dnssd_clientstub ConnectionResponse calling ProcessReply!\n");
         if (op && op->ProcessReply) op->ProcessReply(op, cbh, data, end);
         // WARNING: Don't touch op or sdr after this -- client may have called DNSServiceRefDeallocate
         return;
@@ -1856,6 +1887,7 @@ static void ConnectionResponse(DNSServiceOp *const sdr, const CallbackHeader *co
 
         if (sdr->op == connection_request || sdr->op == connection_delegate_request)
         {
+            syslog(LOG_INFO, "dnssd_clientstub ConnectionResponse AppCallback\n");
             rec->AppCallback(rec->sdr, rec, cbh->cb_flags, cbh->cb_err, rec->AppContext);
         }
         else

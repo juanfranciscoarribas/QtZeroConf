@@ -27,22 +27,35 @@
 #include "qzeroconf.h"
 #include "bonjour_p.h"
 
+#define LOGDEBUG_STATIC	qDebug() << __FUNCTION__ << ":"
+#define LOGDEBUG qDebug() << __FUNCTION__  << ":" << this << ":"
+
 QZeroConfPrivate::QZeroConfPrivate(QZeroConf *parent)
 {
 	pub = parent;
 	dnssRef = NULL;
 	browser = NULL;
 	resolver = NULL;
+	addrInfo = NULL;
 	bs = NULL;
 	browserSocket = NULL;
 	resolverSocket = NULL;
-	addressSocket = NULL;
+  addressSocket = NULL;
+}
+
+QZeroConfPrivate::~QZeroConfPrivate()
+{
+	cleanUp(dnssRef);
+	cleanUp(browser);
+	cleanUp(resolver);
 }
 
 void QZeroConfPrivate::bsRead()
 {
+  LOGDEBUG << "bsRead, calling DNSServiceProcessResult on dnsRef...";
 	DNSServiceErrorType err = DNSServiceProcessResult(dnssRef);
 	if (err != kDNSServiceErr_NoError) {
+    LOGDEBUG << "bsRead, error on DNSServiceProcessResult!";
 		cleanUp(dnssRef);
 		emit pub->error(QZeroConf::serviceRegistrationFailed);
 	}
@@ -50,36 +63,56 @@ void QZeroConfPrivate::bsRead()
 
 void QZeroConfPrivate::browserRead()
 {
+	LOGDEBUG << "browserRead, calling DNSServiceProcessResult...";
 	DNSServiceErrorType err = DNSServiceProcessResult(browser);
 	if (err != kDNSServiceErr_NoError) {
+    LOGDEBUG << "browserRead, error on DNSServiceProcessResult!";
 		cleanUp(browser);
 		emit pub->error(QZeroConf::browserFailed);
 	}
 }
 
+void QZeroConfPrivate::addressRead()
+{
+	LOGDEBUG << "addressRead, calling DNSServiceProcessResult...";
+	DNSServiceErrorType err = DNSServiceProcessResult(addrInfo);
+	if (err != kDNSServiceErr_NoError)
+  {
+    LOGDEBUG << "addressRead, error on DNSServiceProcessResult!";
+		cleanUp(addrInfo);
+  }
+}
+
 void QZeroConfPrivate::resolverRead()
 {
+	LOGDEBUG << "resolverRead, calling DNSServiceProcessResult...";
 	DNSServiceErrorType err = DNSServiceProcessResult(resolver);
 	if (err != kDNSServiceErr_NoError)
+  {
+    LOGDEBUG << "resolverRead, error on DNSServiceProcessResult!";
 		cleanUp(resolver);
+  }
 }
 
 void QZeroConfPrivate::resolve(void)
 {
-	DNSServiceErrorType err;
-
-	err = DNSServiceResolve(&resolver, kDNSServiceFlagsTimeout, work.head().interfaceIndex(), work.head().name().toUtf8(), work.head().type().toUtf8(), work.head().domain().toUtf8(), (DNSServiceResolveReply) resolverCallback, this);
+	LOGDEBUG << "resolve, calling DNSServiceResolve: iface" << work.head().interfaceIndex() << "hostname" << work.head().name().toUtf8() << "type" << work.head().type().toUtf8() << "domain" << work.head().domain().toUtf8();
+	DNSServiceErrorType err = DNSServiceResolve(&resolver, 0, work.head().interfaceIndex(), work.head().name().toUtf8(), work.head().type().toUtf8(), work.head().domain().toUtf8(), (DNSServiceResolveReply) resolverCallback, this);
 	if (err == kDNSServiceErr_NoError) {
 		int sockfd = DNSServiceRefSockFD(resolver);
 		if (sockfd == -1) {
+      LOGDEBUG << "Error in DNSServiceRefSockFD, cleaning up!...";
 			cleanUp(resolver);
 		}
 		else {
+			LOGDEBUG << "Successful DNSServiceResolve, listening on socket" << sockfd << ", resolverSocket=" << resolverSocket;
+      delete resolverSocket;
 			resolverSocket = new QSocketNotifier(sockfd, QSocketNotifier::Read, this);
 			connect(resolverSocket, SIGNAL(activated(int)), this, SLOT(resolverRead()));
 		}
 	}
 	else {
+    LOGDEBUG << "Error in DNSServiceResolve, cleaning up!...";
 		cleanUp(resolver);
 	}
 }
@@ -97,54 +130,73 @@ void DNSSD_API QZeroConfPrivate::registerCallback(DNSServiceRef, DNSServiceFlags
 	}
 }
 
-void DNSSD_API QZeroConfPrivate::browseCallback(DNSServiceRef, DNSServiceFlags flags,
-		quint32 interfaceIndex, DNSServiceErrorType err, const char *name,
-		const char *type, const char *domain, void *userdata)
-{
-	QString key;
-	QZeroConfService zcs;
-	QZeroConfPrivate *ref = static_cast<QZeroConfPrivate *>(userdata);
+void DNSSD_API QZeroConfPrivate::browseCallback(DNSServiceRef sdRef, DNSServiceFlags flags,
+	quint32 interfaceIndex, DNSServiceErrorType err, const char *name,
+	const char *type, const char *domain, void *userdata)
+	{
+		QString key;
+		QZeroConfService zcs;
+		QZeroConfPrivate *ref = static_cast<QZeroConfPrivate *>(userdata);
 
-	//qDebug() << name;
-	if (err == kDNSServiceErr_NoError) {
+		LOGDEBUG_STATIC << "browseCallback";
+		if (err != kDNSServiceErr_NoError) {
+			ref->cleanUp(ref->browser);
+			emit ref->pub->error(QZeroConf::browserFailed);
+		}
+
 		key = name + QString::number(interfaceIndex);
 		if (flags & kDNSServiceFlagsAdd) {
 			if (!ref->pub->services.contains(key)) {
+				LOGDEBUG_STATIC << "browseCallback, brand new service (ADD):" << name << type << domain << interfaceIndex;
 				zcs.setName(name);
 				zcs.setType(type);
 				zcs.setDomain(domain);
 				zcs.setInterfaceIndex(interfaceIndex);
+
 				if (!ref->work.size()) {
+					LOGDEBUG_STATIC << "browseCallback, first item on work queue -> enqueue & resolve!";
 					ref->work.enqueue(zcs);
 					ref->resolve();
 				}
-				else
+				else {
+					LOGDEBUG_STATIC << "browseCallback, more items on work queue -> enqueueing";
 					ref->work.enqueue(zcs);
+				}
+			}
+			else {
+				LOGDEBUG_STATIC << "browseCallback, existing service (ADD), skipping...";
 			}
 		}
 		else if (ref->pub->services.contains(key)) {
+			LOGDEBUG_STATIC << "browseCallback, existing service (REMOVE):";
+			qDebug() << key;
 			zcs = ref->pub->services[key];
 			ref->pub->services.remove(key);
 			emit ref->pub->serviceRemoved(zcs);
 		}
-	}
-	else {
-		ref->cleanUp(ref->browser);
-		emit ref->pub->error(QZeroConf::browserFailed);
-	}
+		else {
+			LOGDEBUG_STATIC << "browseCallback, unknown service (REMOVE)?, ERROR!";
+      ref->cleanUp(ref->browser);
+      emit ref->pub->error(QZeroConf::browserFailed);
+		}
 }
 
-void DNSSD_API QZeroConfPrivate::resolverCallback(DNSServiceRef, DNSServiceFlags,
+void DNSSD_API QZeroConfPrivate::resolverCallback(DNSServiceRef sdRef, DNSServiceFlags,
 		quint32 interfaceIndex, DNSServiceErrorType err, const char *,
 		const char *hostName, quint16 port, quint16 txtLen,
 		const char * txtRecord, void *userdata)
 {
-	QZeroConfPrivate *ref = static_cast<QZeroConfPrivate *>(userdata);
+  QZeroConfPrivate *ref = static_cast<QZeroConfPrivate *>(userdata);
 
 	if (err != kDNSServiceErr_NoError) {
-		ref->cleanUp(ref->resolver);
+    if (ref) {
+      ref->cleanUp(ref->resolver);
+    }
+		LOGDEBUG_STATIC << "resolverCallback: Error! SKIPPING...";
 		return;
 	}
+
+	LOGDEBUG_STATIC << "resolverCallback:" << hostName << qFromBigEndian<quint16>(port) << interfaceIndex;
 
 	qint16 recLen;
 	while (txtLen > 0)		// add txt records
@@ -161,99 +213,140 @@ void DNSSD_API QZeroConfPrivate::resolverCallback(DNSServiceRef, DNSServiceFlags
 		txtLen-= recLen + 1;
 		txtRecord+= recLen;
 	}
+
 	ref->work.head().setHost(hostName);
 	ref->work.head().setPort(qFromBigEndian<quint16>(port));
-	err = DNSServiceGetAddrInfo(&ref->resolver, kDNSServiceFlagsForceMulticast, interfaceIndex, ref->protocol, hostName, (DNSServiceGetAddrInfoReply) addressReply, ref);
+
+  ref->cleanUp(ref->resolver);
+
+	LOGDEBUG_STATIC << "resolverCallback, calling DNSServiceGetAddrInfo";
+	err = DNSServiceGetAddrInfo(&ref->addrInfo, kDNSServiceFlagsForceMulticast, interfaceIndex, ref->protocol, hostName, (DNSServiceGetAddrInfoReply) addressReply, ref);
 	if (err == kDNSServiceErr_NoError) {
-		int sockfd = DNSServiceRefSockFD(ref->resolver);
-		if (sockfd == -1) {
-			ref->cleanUp(ref->resolver);
-		}
-		else {
+    LOGDEBUG_STATIC << "DNSServiceGetAddrInfo successful, waiting callback to be called...";
+		int sockfd = DNSServiceRefSockFD(ref->addrInfo);
+		if (sockfd != -1) {
+			LOGDEBUG_STATIC << "Succesful DNSServiceGetAddrInfo, waiting on addressSocket: " << sockfd;
+			delete ref->addressSocket;
 			ref->addressSocket = new QSocketNotifier(sockfd, QSocketNotifier::Read, ref);
-			connect(ref->addressSocket, SIGNAL(activated(int)), ref, SLOT(resolverRead()));
+			connect(ref->addressSocket, SIGNAL(activated(int)), ref, SLOT(addressRead()));
 		}
 	}
-	else {
-		ref->cleanUp(ref->resolver);
-	}
+  else {
+    LOGDEBUG_STATIC << "Error on DNSServiceGetAddrInfo";
+    ref->cleanUp(ref->addrInfo);
+  }
 }
 
 void DNSSD_API QZeroConfPrivate::addressReply(DNSServiceRef sdRef,
-		DNSServiceFlags flags, quint32 interfaceIndex,
-		DNSServiceErrorType err, const char *hostName,
-		const struct sockaddr* address, quint32 ttl, void *userdata)
-{
-	Q_UNUSED(interfaceIndex);
-	Q_UNUSED(sdRef);
-	Q_UNUSED(ttl);
-	Q_UNUSED(hostName);
+	DNSServiceFlags flags, quint32 interfaceIndex,
+	DNSServiceErrorType err, const char *hostName,
+	const struct sockaddr* address, quint32 ttl, void *userdata)
+	{
+		Q_UNUSED(interfaceIndex);
+		Q_UNUSED(sdRef);
+		Q_UNUSED(ttl);
+		Q_UNUSED(hostName);
 
-	QZeroConfPrivate *ref = static_cast<QZeroConfPrivate *>(userdata);
+		LOGDEBUG_STATIC << "addressReply:" << hostName;
+		QZeroConfPrivate *ref = static_cast<QZeroConfPrivate *>(userdata);
 
-	if (err == kDNSServiceErr_NoError) {
-		if ((flags & kDNSServiceFlagsAdd) != 0) {
+		if (err != kDNSServiceErr_NoError) {
+      ref->cleanUp(ref->addrInfo);
+			return;
+		}
+
+		if (flags & kDNSServiceFlagsAdd) {
 			QHostAddress hAddress(address);
 			if (hAddress.protocol() == QAbstractSocket::IPv6Protocol)
+			{
 				ref->work.head().setIpv6(hAddress);
-			else
-				ref->work.head().setIp(hAddress);
-
-			QString key = ref->work.head().name() + QString::number(interfaceIndex);
-			if (!ref->pub->services.contains(key)) {
-				ref->pub->services.insert(key, ref->work.head());
-				emit ref->pub->serviceAdded(ref->work.head());
 			}
 			else
-				emit ref->pub->serviceUpdated(ref->work.head());
+			{
+				ref->work.head().setIp(hAddress);
+			}
 
+			QString key = ref->work.head().name() + QString::number(interfaceIndex);
+			if (!ref->pub->services.contains(key))
+			{
+				ref->pub->services.insert(key, ref->work.head());
+				LOGDEBUG_STATIC << "addressReply, emitting serviceAdded signal for " << hostName;
+				emit ref->pub->serviceAdded(ref->work.head());
+			}
+			else {
+				LOGDEBUG_STATIC << "addressReply, emitting serviceUpdated signal for " << hostName;
+				emit ref->pub->serviceUpdated(ref->work.head());
+			}
 		}
-		if (!(flags & kDNSServiceFlagsMoreComing))
-			ref->cleanUp(ref->resolver);
-	}
-	else
-		ref->cleanUp(ref->resolver);
+
+		if (!(flags & kDNSServiceFlagsMoreComing)) {
+			ref->cleanUp(ref->addrInfo);
+		}
+		else {
+			LOGDEBUG_STATIC << "addressReply, kDNSServiceFlagsMoreComing! SKIPPING cleanup for resolver";
+		}
 }
 
 void QZeroConfPrivate::cleanUp(DNSServiceRef toClean)
 {
 	if (!toClean)
 		return;
-	if (toClean == resolver) {
-		if (addressSocket) {
-			delete addressSocket;
-			addressSocket = NULL;
-		}
+
+	if (toClean == addrInfo) {
+		LOGDEBUG << "cleanUp: addrInfo";
+		addrInfo = NULL;
+
+    if (addressSocket) {
+      delete addressSocket;
+      addressSocket = NULL;
+    }
+
+    // reolving next item
+    if(!work.isEmpty()) {
+      LOGDEBUG << "cleanUp: resolver: Dequeueing last item from work";
+      work.dequeue();
+    }
+    if (work.size()) {
+      LOGDEBUG << "cleanUp: resolver: Calling resolve to process work list's next item";
+      resolve();
+    }
+	}
+	else if (toClean == resolver) {
+		LOGDEBUG << "cleanUp: resolver";
 		if (resolverSocket) {
 			delete resolverSocket;
 			resolverSocket = NULL;
 		}
-		if(!work.isEmpty())
-			work.dequeue();
-		if (work.size())
-			resolve();
+		resolver = NULL;
 	}
 	else if (toClean == browser) {
+		LOGDEBUG << "cleanUp: browser";
 		browser = NULL;
 		if (browserSocket) {
 			delete browserSocket;
 			browserSocket = NULL;
 		}
 		QMap<QString, QZeroConfService >::iterator i;
+		LOGDEBUG << "cleanUp: browser: Removing found services...";
 		for (i = pub->services.begin(); i != pub->services.end(); i++) {
 			emit pub->serviceRemoved(*i);
 		}
 		pub->services.clear();
 	}
 	else if (toClean == dnssRef) {
+		LOGDEBUG << "cleanUp: dnsRef";
 		dnssRef = NULL;
 		if (bs) {
 			delete bs;
 			bs = NULL;
 		}
 	}
+	else {
+		LOGDEBUG << "cleanUp: unknown clean-up, SKIPPING!";
+	}
 
-	DNSServiceRefDeallocate(toClean);
+		LOGDEBUG << "cleanUp: Calling DNSServiceRefDeallocate";
+		DNSServiceRefDeallocate(toClean);
 }
 
 QZeroConf::QZeroConf(QObject *parent) : QObject (parent)
@@ -264,22 +357,18 @@ QZeroConf::QZeroConf(QObject *parent) : QObject (parent)
 
 QZeroConf::~QZeroConf()
 {
-	pri->cleanUp(pri->dnssRef);
-	pri->cleanUp(pri->browser);
-	pri->cleanUp(pri->resolver);
 	delete pri;
 }
 
 void QZeroConf::startServicePublish(const char *name, const char *type, const char *domain, quint16 port)
 {
-	DNSServiceErrorType err;
-
 	if (pri->dnssRef) {
 		emit error(QZeroConf::serviceRegistrationFailed);
 		return;
 	}
-
-	err = DNSServiceRegister(&pri->dnssRef, NULL, NULL,
+	DNSServiceErrorType err = DNSServiceRegister(&pri->dnssRef,
+      0,
+      NULL,
 			name,
 			type,
 			domain,
@@ -295,6 +384,7 @@ void QZeroConf::startServicePublish(const char *name, const char *type, const ch
 			emit error(QZeroConf::serviceRegistrationFailed);
 		}
 		else {
+      // TODO: delete pri->bs here!
 			pri->bs = new QSocketNotifier(sockfd, QSocketNotifier::Read, this);
 			connect(pri->bs, SIGNAL(activated(int)), pri, SLOT(bsRead()));
 		}
@@ -338,12 +428,12 @@ void QZeroConf::clearServiceTxtRecords()
 
 void QZeroConf::startBrowser(QString type, QAbstractSocket::NetworkLayerProtocol protocol)
 {
-	DNSServiceErrorType err;
-
 	if (pri->browser) {
 		emit error(QZeroConf::browserFailed);
 		return;
 	}
+
+	LOGDEBUG << "Calling DNSServiceBrowse";
 
 	switch (protocol) {
 		case QAbstractSocket::IPv4Protocol: pri->protocol = kDNSServiceProtocol_IPv4; break;
@@ -352,26 +442,32 @@ void QZeroConf::startBrowser(QString type, QAbstractSocket::NetworkLayerProtocol
 		default: pri->protocol = kDNSServiceProtocol_IPv4; break;
 	};
 
-	err = DNSServiceBrowse(&pri->browser, 0, 0, type.toUtf8(), 0, (DNSServiceBrowseReply) QZeroConfPrivate::browseCallback, pri);
-	if (err == kDNSServiceErr_NoError) {
-		int sockfd = DNSServiceRefSockFD(pri->browser);
-		if (sockfd == -1) {
-			pri->cleanUp(pri->browser);
-			emit error(QZeroConf::browserFailed);
-		}
-		else {
-			pri->browserSocket = new QSocketNotifier(sockfd, QSocketNotifier::Read, this);
-			connect(pri->browserSocket, SIGNAL(activated(int)), pri, SLOT(browserRead()));
-		}
-	}
-	else {
+	DNSServiceErrorType err = DNSServiceBrowse(&pri->browser, 0, 0, type.toUtf8(), 0, (DNSServiceBrowseReply) QZeroConfPrivate::browseCallback, pri);
+	if (err != kDNSServiceErr_NoError) {
+		LOGDEBUG << "DNSServiceBrowse failed! Returned:" << err;
 		pri->cleanUp(pri->browser);
 		emit error(QZeroConf::browserFailed);
+		return;
 	}
+
+	int sockfd = DNSServiceRefSockFD(pri->browser);
+	if (sockfd == -1) {
+		LOGDEBUG << "DNSServiceRefSockFD failed! Returned:" << sockfd;
+		pri->cleanUp(pri->browser);
+		emit error(QZeroConf::browserFailed);
+		return;
+	}
+
+	LOGDEBUG << "Successful DNSServiceBrowse, waiting on browserSocket: " << sockfd;
+	delete pri->browserSocket;
+	pri->browserSocket = new QSocketNotifier(sockfd, QSocketNotifier::Read, this);
+	connect(pri->browserSocket, SIGNAL(activated(int)), pri, SLOT(browserRead()));
 }
 
 void QZeroConf::stopBrowser(void)
 {
+  pri->cleanUp(pri->addrInfo);
+  pri->cleanUp(pri->resolver);
 	pri->cleanUp(pri->browser);
 }
 

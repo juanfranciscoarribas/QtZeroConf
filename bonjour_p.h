@@ -45,23 +45,24 @@ class QZeroConfPrivate : public QObject
 
 public:
 	QZeroConfPrivate(QZeroConf *parent);
+	~QZeroConfPrivate();
 	void cleanUp(DNSServiceRef ref);
 	void resolve(void);
 
-	static void DNSSD_API registerCallback(DNSServiceRef, DNSServiceFlags, DNSServiceErrorType errorCode, const char *,
+	static void DNSSD_API registerCallback(DNSServiceRef sdRef, DNSServiceFlags, DNSServiceErrorType errorCode, const char *,
 			const char *, const char *, void *userdata);
 
-	static void DNSSD_API browseCallback(DNSServiceRef, DNSServiceFlags flags,quint32, DNSServiceErrorType err, const char *name,
+	static void DNSSD_API browseCallback(DNSServiceRef sdRef, DNSServiceFlags flags,quint32, DNSServiceErrorType err, const char *name,
 			const char *type, const char *domain, void *userdata);
 
-	static void DNSSD_API resolverCallback(DNSServiceRef, DNSServiceFlags, quint32, DNSServiceErrorType err, const char *,
+	static void DNSSD_API resolverCallback(DNSServiceRef sdRef, DNSServiceFlags, quint32, DNSServiceErrorType err, const char *,
 			const char *hostName, quint16 port, quint16 txtLen,	const char * txtRecord, void *userdata);
 
 	static void DNSSD_API addressReply(DNSServiceRef sdRef,	DNSServiceFlags flags, quint32 interfaceIndex,
 			DNSServiceErrorType err, const char *hostName, const struct sockaddr* address, quint32 ttl, void *userdata);
 
 	QZeroConf *pub;
-	DNSServiceRef dnssRef, browser, resolver;
+	DNSServiceRef dnssRef, browser, resolver, addrInfo;
 	DNSServiceProtocol protocol;
 	QSocketNotifier *bs, *browserSocket, *resolverSocket, *addressSocket;
 	QQueue<QZeroConfService> work;
@@ -71,6 +72,7 @@ public slots:
 	void bsRead();
 	void browserRead();
 	void resolverRead();
+  void addressRead();
 };
 
 #endif	// QZEROCONFPRIVATE_H_
