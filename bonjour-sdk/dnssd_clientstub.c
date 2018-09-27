@@ -48,6 +48,7 @@
     #include <windows.h>
     #include <stdarg.h>
     #include <stdio.h>
+    #include "dnssd_log.h"
 
     #define sockaddr_mdns sockaddr_in
     #define AF_MDNS AF_INET
@@ -75,7 +76,7 @@ static void syslog( int priority, const char * message, ...)
     va_start( args, message );
     len = _vscprintf( message, args ) + 1;
     buffer = malloc( len * sizeof(char) );
-    if ( buffer ) { vsnprintf( buffer, len, message, args ); OutputDebugString( buffer ); free( buffer ); }
+    if ( buffer ) { vsnprintf( buffer, len, message, args ); print_debug(buffer); free( buffer ); }
     WSASetLastError( err );
 }
 #else

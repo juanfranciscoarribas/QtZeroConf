@@ -35,11 +35,12 @@ win32 {
 	DEFINES+= NOT_HAVE_SA_LEN
 	QMAKE_CFLAGS+= -I$$PWD/bonjour-sdk
 	QMAKE_CXXFLAGS+= -I$$PWD/bonjour-sdk -I$$PWD
-	HEADERS+= $$PWD/qzeroconf.h $$PWD/bonjour_p.h
+	HEADERS+= $$PWD/qzeroconf.h $$PWD/bonjour_p.h $$PWD/bonjour-sdk/dnssd_log.h
 	SOURCES+= $$PWD/bonjour.cpp
 	SOURCES+= $$PWD/bonjour-sdk/dnssd_clientlib.c
 	SOURCES+= $$PWD/bonjour-sdk/dnssd_clientstub.c
 	SOURCES+= $$PWD/bonjour-sdk/dnssd_ipc.c
+  SOURCES+= $$PWD/bonjour-sdk/dnssd_log.cpp
 	LIBS+= -lws2_32 -lwsock32
 }
 
